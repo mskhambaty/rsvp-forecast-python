@@ -1,0 +1,8 @@
+services:
+  - type: web
+    name: rsvp-forecast-python
+    runtime: docker
+    plan: free
+    envVars:
+      - key: PORT
+        value: "8000"
