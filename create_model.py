@@ -40,20 +40,56 @@ try:
         else:
             raise ValueError("Neither 'y' nor 'RegisteredCount' columns found in data")
     
+    # Create the additional regressor columns (matching the R implementation)
+    print("Creating regressor columns...")
+    
+    # Convert categorical columns to appropriate types
+    if 'DayOfWeek' not in data.columns:
+        # Extract day of week from date
+        data['DayOfWeek'] = data['ds'].dt.dayofweek
+    data['DayOfWeek_2'] = data['DayOfWeek'].astype('category')
+    
+    # Binary columns (0/1)
+    data['RegisteredCount_2'] = data['RegisteredCount'].copy()
+    data.loc[data['RegisteredCount_2'] == 'Rain', 'RegisteredCount_2'] = 1
+    data.loc[data['RegisteredCount_2'] != 1, 'RegisteredCount_2'] = 0
+    data['RegisteredCount_2'] = data['RegisteredCount_2'].astype(float)
+    
+    data['WeatherTemperature_2'] = data['WeatherTemperature'].astype('category')
+    
+    data['WeatherType_2'] = 0
+    data.loc[data['WeatherType'] == 'Rain', 'WeatherType_2'] = 1
+    
+    data['SpecialEvent_2'] = 0
+    data.loc[data['SpecialEvent'] == 'Yes', 'SpecialEvent_2'] = 1
+    
+    data['EventName_2'] = data['EventName'].astype('category')
+    
     # Basic data validation
     if len(data) < 5:
         raise ValueError(f"Not enough valid data points for training (only {len(data)} rows)")
     
     print("Creating and training Prophet model...")
-    # Create and train model with minimal parameters for robustness
+    # Create model with parameters matching the R implementation
     model = Prophet(
         daily_seasonality=True,
         yearly_seasonality=True,
-        weekly_seasonality=True
+        weekly_seasonality=True,
+        seasonality_mode='multiplicative'  # Changed from default 'additive' to match R
     )
     
-    # Fit the model on the processed data
-    model.fit(data[['ds', 'y']])
+    # Add regressors
+    model.add_regressor('DayOfWeek_2')
+    model.add_regressor('RegisteredCount_2')
+    model.add_regressor('WeatherTemperature_2')
+    model.add_regressor('WeatherType_2')
+    model.add_regressor('SpecialEvent_2')
+    model.add_regressor('EventName_2')
+    
+    # Fit the model on the processed data with regressors
+    cols_to_use = ['ds', 'y', 'DayOfWeek_2', 'RegisteredCount_2', 'WeatherTemperature_2', 
+                   'WeatherType_2', 'SpecialEvent_2', 'EventName_2']
+    model.fit(data[cols_to_use])
     
     print("Serializing model to JSON...")
     # Serialize model to JSON
@@ -82,7 +118,10 @@ except Exception as e:
     })
     
     # Create and fit a simplified model
-    fallback_model = Prophet()
+    fallback_model = Prophet(
+        daily_seasonality=True,
+        seasonality_mode='multiplicative'
+    )
     fallback_model.fit(synthetic_data)
     
     # Save the fallback model
