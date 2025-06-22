@@ -58,7 +58,8 @@ async def predict(input_data: PredictionInput):
     future['DayOfWeek_2'] = future['ds'].dt.dayofweek.astype('category')
     
     # Set default values for regressors
-    future['RegisteredCount_2'] = 0
+    # CORRECTED: Use the provided registered_count, or a default if not provided.
+    future['RegisteredCount_2'] = input_data.registered_count if input_data.registered_count is not None else 0
     future['WeatherTemperature_2'] = "0" if input_data.weather_temperature is None else str(int(input_data.weather_temperature))
     future['WeatherTemperature_2'] = future['WeatherTemperature_2'].astype('category')
     future['WeatherType_2'] = 0 if input_data.weather_type != "Rain" else 1
@@ -110,7 +111,8 @@ async def predict_event_rsvp(input_data: EventRSVPInput):
     prediction_df = pd.DataFrame({
         'ds': [event_date],
         'DayOfWeek_2': [event_date.dayofweek],
-        'RegisteredCount_2': [1 if input_data.registered_count == "Rain" else 0],
+        # CORRECTED: This now correctly uses the integer value from the input
+        'RegisteredCount_2': [input_data.registered_count],
         'WeatherTemperature_2': [str(int(input_data.weather_temperature))],
         'WeatherType_2': [1 if input_data.weather_type == "Rain" else 0],
         'SpecialEvent_2': [1 if input_data.special_event else 0],
