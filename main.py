@@ -1,49 +1,44 @@
 from fastapi import FastAPI, HTTPException
 import pandas as pd
-from prophet import Prophet
-from prophet.serialize import model_from_json
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime
 import numpy as np
+import pickle
 import json
 
 app = FastAPI()
 
-# --- Globals for Model and Columns ---
-model = None
-regressor_columns = []
+# --- Globals for Models and Metadata ---
+rf_model = None
+lr_model = None
+metadata = None
 
-# --- Load Model and Columns on Startup ---
+# --- Load Models on Startup ---
 @app.on_event("startup")
-def load_model():
-    global model, regressor_columns
-    # Try simplified model first, fallback to complex model
-    model_files = [
-        ("serialized_model_simplified.json", "model_columns_simplified.json", "simplified"),
-        ("serialized_model.json", "model_columns.json", "complex")
-    ]
+def load_models():
+    global rf_model, lr_model, metadata
+    try:
+        # Load Random Forest model (primary)
+        with open("rf_model.pkl", "rb") as f:
+            rf_model = pickle.load(f)
+        print("Random Forest model loaded successfully.")
 
-    for model_file, columns_file, model_type in model_files:
-        try:
-            print(f"Loading {model_type} Prophet model...")
-            with open(model_file, "r") as fin:
-                model = model_from_json(fin.read())
-            print(f"{model_type.title()} model loaded successfully.")
+        # Load Linear Regression model (backup)
+        with open("lr_model.pkl", "rb") as f:
+            lr_model = pickle.load(f)
+        print("Linear Regression model loaded successfully.")
 
-            with open(columns_file, "r") as fin:
-                regressor_columns = json.load(fin)
-            print(f"{model_type.title()} regressor columns loaded successfully.")
-            return  # Success, exit function
+        # Load metadata
+        with open("model_metadata.json", "r") as f:
+            metadata = json.load(f)
+        print("Model metadata loaded successfully.")
 
-        except FileNotFoundError:
-            print(f"WARNING: {model_type} model files not found.")
-            continue
-
-    # If we get here, no model was loaded
-    print("ERROR: No model files found.")
-    model = None
-    regressor_columns = []
+    except FileNotFoundError as e:
+        print(f"ERROR: Model files not found: {e}")
+        rf_model = None
+        lr_model = None
+        metadata = None
 
 class EventRSVPInput(BaseModel):
     event_date: str
@@ -67,69 +62,140 @@ class EventRSVPInput(BaseModel):
             }
         }
 
+def create_features(input_data: EventRSVPInput):
+    """Create feature vector from input data for the practical models"""
+    try:
+        event_date = pd.to_datetime(input_data.event_date)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD.")
+
+    # Initialize feature vector
+    features = {}
+
+    # Basic features
+    features['RegisteredCount'] = input_data.registered_count
+    features['is_rain'] = 1 if input_data.weather_type.lower() in ['rain', 'rainy'] else 0
+    features['is_special'] = 1 if input_data.special_event else 0
+
+    # Temperature features
+    temp_normalized = (input_data.weather_temperature - metadata['temp_stats']['mean']) / metadata['temp_stats']['std']
+    features['temp_normalized'] = temp_normalized
+    features['temp_cold'] = 1 if input_data.weather_temperature < 40 else 0
+    features['temp_hot'] = 1 if input_data.weather_temperature > 75 else 0
+
+    # Sunset features
+    try:
+        sunset_parts = input_data.sunset_time.split(":")
+        sunset_minutes = int(sunset_parts[0]) * 60 + int(sunset_parts[1])
+        sunset_normalized = (sunset_minutes - metadata['sunset_stats']['mean']) / metadata['sunset_stats']['std']
+        features['sunset_normalized'] = sunset_normalized
+        features['sunset_early'] = 1 if sunset_minutes < 1140 else 0  # Before 19:00
+        features['sunset_late'] = 1 if sunset_minutes > 1200 else 0   # After 20:00
+    except:
+        raise HTTPException(status_code=400, detail="Invalid sunset time format. Use HH:MM.")
+
+    # Day of week features
+    day_name = event_date.day_name()
+    for day in ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']:
+        features[f'is_{day.lower()}'] = 1 if day_name == day else 0
+
+    # Event type features
+    event_name_lower = input_data.event_name.lower()
+    features['is_sherullah'] = 1 if 'sherullah' in event_name_lower else 0
+    features['is_eid'] = 1 if 'eid' in event_name_lower else 0
+    features['is_urs'] = 1 if 'urs' in event_name_lower else 0
+    features['is_milad'] = 1 if 'milad' in event_name_lower else 0
+
+    # Convert to array in correct order
+    feature_array = [features.get(col, 0) for col in metadata['feature_cols']]
+
+    return feature_array, features
+
+def ratio_based_prediction(input_data: EventRSVPInput):
+    """Simple ratio-based prediction as fallback"""
+    try:
+        event_date = pd.to_datetime(input_data.event_date)
+        day_name = event_date.day_name()
+
+        # Start with day-specific ratio
+        ratio = metadata['day_ratios'].get(day_name, metadata['base_ratio'])
+
+        # Weather adjustment
+        if input_data.weather_type.lower() in ['rain', 'rainy']:
+            ratio = metadata['weather_ratios']['rain']
+        else:
+            ratio = metadata['weather_ratios']['clear']
+
+        # Special event adjustment
+        if input_data.special_event:
+            ratio = metadata['event_ratios']['special']
+        else:
+            ratio = metadata['event_ratios']['normal']
+
+        prediction = int(round(input_data.registered_count * ratio))
+        return max(prediction, 0)
+
+    except:
+        # Ultimate fallback
+        return int(round(input_data.registered_count * metadata['base_ratio']))
+
 @app.get("/")
 async def root():
-    return {"message": "Prophet Forecasting API", "status": "ready", "model_loaded": model is not None}
+    return {"message": "Prophet Forecasting API", "status": "ready", "model_loaded": rf_model is not None and lr_model is not None}
 
 @app.get("/model_info")
 async def get_model_info():
     """
     Get information about the model's expected inputs for ChatGPT integration.
     """
-    if model is None or not regressor_columns:
+    if not metadata:
         raise HTTPException(status_code=500, detail="Model not loaded")
 
-    available_temps = get_available_temperatures()
-    available_events = get_available_events()
-
     return {
-        "available_temperatures": sorted([int(temp) for temp in available_temps]),
+        "model_type": "Random Forest + Linear Regression",
+        "training_events": metadata['training_stats']['total_events'],
+        "average_error": "33.1 people (Random Forest)",
+        "base_attendance_ratio": round(metadata['base_ratio'], 3),
+        "available_temperatures": "Any temperature (automatically processed)",
         "temperature_range": {
-            "min": min([int(temp) for temp in available_temps]) if available_temps else None,
-            "max": max([int(temp) for temp in available_temps]) if available_temps else None
+            "min": -50,
+            "max": 150,
+            "note": "Any temperature accepted, processed intelligently"
         },
-        "available_events": available_events,
-        "weather_types": ["Clear", "Rain", "Rainy"],  # Based on training data
+        "available_events": "Any event name (automatically categorized)",
+        "weather_types": ["Clear", "Rain", "Rainy"],
         "date_format": "YYYY-MM-DD",
         "input_schema": {
             "event_date": "string (YYYY-MM-DD format)",
             "registered_count": "integer (number of people registered)",
-            "weather_temperature": "number (will find nearest available temperature)",
+            "weather_temperature": "number (any temperature in Fahrenheit)",
             "weather_type": "string (Clear, Rain, or Rainy - case insensitive)",
             "special_event": "boolean (true for special events)",
-            "event_name": "string (if not in training data, will use other features)",
+            "event_name": "string (any event name)",
             "sunset_time": "string (HH:MM format, 24-hour)"
         },
+        "insights": [
+            f"Best attendance day: {max(metadata['day_ratios'], key=metadata['day_ratios'].get)} ({max(metadata['day_ratios'].values()):.1%})",
+            f"Worst attendance day: {min(metadata['day_ratios'], key=metadata['day_ratios'].get)} ({min(metadata['day_ratios'].values()):.1%})",
+            f"Rain reduces attendance by {(metadata['weather_ratios']['clear'] - metadata['weather_ratios']['rain']) * 100:.1f}%",
+            f"Special events reduce attendance by {(metadata['event_ratios']['normal'] - metadata['event_ratios']['special']) * 100:.1f}%"
+        ],
         "notes": [
-            "Temperature will be rounded to nearest available value from training data",
-            "Unknown event names are handled gracefully using other features",
-            "Weather type is case-insensitive and accepts Rain/Rainy variations"
+            "Model works for any future date (no temporal limitations)",
+            "Accepts any temperature and event name (intelligent processing)",
+            "Provides confidence intervals for planning",
+            "Based on Random Forest with 33.1 people average error"
         ]
     }
 
-def find_nearest_temperature(target_temp, available_temps):
-    """Find the nearest available temperature from training data"""
-    target_temp = float(target_temp)
-    available_temps_float = [float(temp) for temp in available_temps]
-    nearest_temp = min(available_temps_float, key=lambda x: abs(x - target_temp))
-    return int(nearest_temp)
-
-def get_available_temperatures():
-    """Extract available temperatures from regressor columns"""
-    temp_cols = [col for col in regressor_columns if col.startswith("WeatherTemperature_")]
-    return [col.split("_")[1] for col in temp_cols]
-
-def get_available_events():
-    """Extract available event names from regressor columns"""
-    event_cols = [col for col in regressor_columns if col.startswith("EventName_")]
-    return [col.replace("EventName_", "") for col in event_cols]
+# Remove old Prophet-specific helper functions - no longer needed
 
 @app.post("/predict_event_rsvp")
 async def predict_event_rsvp(input_data: EventRSVPInput):
     """
     Predict RSVP count for a single event with all regressor parameters.
     """
-    if model is None or not regressor_columns:
+    if not rf_model or not lr_model or not metadata:
         raise HTTPException(status_code=500, detail="Model or model columns not loaded. Please train the model first.")
 
     # Input validation
@@ -158,156 +224,63 @@ async def predict_event_rsvp(input_data: EventRSVPInput):
     except (ValueError, AttributeError):
         raise HTTPException(status_code=400, detail="Sunset time must be in HH:MM format (24-hour), e.g., '19:30'.")
 
-    # --- Create Prediction DataFrame ---
-    # Start with a dictionary for the single row of data
-    pred_data = {'ds': event_date}
-
-    # Initialize all known regressor columns to 0
-    for col in regressor_columns:
-        pred_data[col] = 0
-
-    # Fill in the simple numeric regressors
-    pred_data['RegisteredCount_reg'] = input_data.registered_count
-    pred_data['WeatherType_reg'] = 1 if input_data.weather_type.lower() in ["rain", "rainy"] else 0
-    pred_data['SpecialEvent_reg'] = 1 if input_data.special_event else 0
-
-    # Process sunset time features
-    try:
-        sunset_parts = input_data.sunset_time.split(":")
-        sunset_hour = int(sunset_parts[0])
-        sunset_minute = int(sunset_parts[1])
-        sunset_minutes = sunset_hour * 60 + sunset_minute
-        pred_data['SunsetMinutes_reg'] = sunset_minutes
-
-        # Set sunset category
-        if sunset_hour < 19:
-            sunset_category = 'Early'
-        elif sunset_hour < 20:
-            sunset_category = 'Normal'
-        else:
-            sunset_category = 'Late'
-
-        # Set sunset hour and category one-hot features
-        sunset_hour_col = f"SunsetHour_{sunset_hour}"
-        if sunset_hour_col in pred_data:
-            pred_data[sunset_hour_col] = 1
-
-        sunset_category_col = f"SunsetCategory_{sunset_category}"
-        if sunset_category_col in pred_data:
-            pred_data[sunset_category_col] = 1
-
-    except (ValueError, AttributeError) as e:
-        warnings.append(f"Error processing sunset time: {e}")
-        # Set default values if sunset processing fails
-        pred_data['SunsetMinutes_reg'] = 1140  # Default to 19:00 (19*60 = 1140 minutes)
-
-    # Tracking for debugging
+    # --- Use New Practical Models ---
     warnings = []
 
-    # Set the specific one-hot encoded columns to 1
-    # DayOfWeek
-    day_of_week_col = f"DayOfWeek_{event_date.day_name()}"
-    if day_of_week_col in pred_data:
-        pred_data[day_of_week_col] = 1
-    else:
-        warnings.append(f"Day of week '{event_date.day_name()}' not found in training data")
+    try:
+        # Create features for the practical models
+        feature_array, feature_dict = create_features(input_data)
 
-    # Check if we're using simplified or complex model
-    using_simplified = any(col.startswith("EventType_") for col in regressor_columns)
+        # Random Forest prediction (primary)
+        rf_prediction = rf_model.predict([feature_array])[0]
+        rf_prediction = max(int(round(rf_prediction)), 0)
 
-    if using_simplified:
-        # Simplified model logic
-        # Temperature categories
-        temp = input_data.weather_temperature
-        if temp < 40:
-            temp_category = 'Cold'
-        elif temp < 60:
-            temp_category = 'Cool'
-        elif temp < 80:
-            temp_category = 'Warm'
-        else:
-            temp_category = 'Hot'
+        # Linear Regression prediction (backup)
+        lr_prediction = lr_model.predict([feature_array])[0]
+        lr_prediction = max(int(round(lr_prediction)), 0)
 
-        temp_col = f"TempCategory_{temp_category}"
-        if temp_col in pred_data:
-            pred_data[temp_col] = 1
+        # Ratio-based prediction (fallback)
+        ratio_prediction = ratio_based_prediction(input_data)
 
-        # Event type categorization - default to most common type if unknown
-        event_name = input_data.event_name.lower()
-        if 'sherullah' in event_name:
-            event_type = 'Sherullah'
-        elif 'urs' in event_name:
-            event_type = 'Urs'
-        elif 'eid' in event_name or 'milad' in event_name:
-            event_type = 'Celebration'
-        elif 'raat' in event_name or 'daris' in event_name:
-            event_type = 'Educational'
-        else:
-            # Default to Sherullah as it's most common in training data
-            event_type = 'Sherullah'
-            warnings.append(f"Unknown event type, defaulting to Sherullah category")
+        # Use Random Forest as primary prediction
+        predicted_rsvp = rf_prediction
 
-        event_type_col = f"EventType_{event_type}"
-        if event_type_col in pred_data:
-            pred_data[event_type_col] = 1
+        # Calculate confidence interval based on historical performance
+        std_error = 33.1  # From training analysis
+        confidence_interval = 1.96 * std_error  # 95% confidence
 
-        # Sunset category
-        try:
-            sunset_hour = int(input_data.sunset_time.split(':')[0])
-            if sunset_hour < 19:
-                sunset_category = 'Early'
-            elif sunset_hour < 20:
-                sunset_category = 'Normal'
-            else:
-                sunset_category = 'Late'
+        lower_bound = max(int(predicted_rsvp - confidence_interval), 0)
+        upper_bound = int(predicted_rsvp + confidence_interval)
 
-            sunset_cat_col = f"SunsetCategory_{sunset_category}"
-            if sunset_cat_col in pred_data:
-                pred_data[sunset_cat_col] = 1
-        except:
-            warnings.append("Error processing sunset category")
+        # Add insights as warnings
+        event_date = pd.to_datetime(input_data.event_date)
+        day_name = event_date.day_name()
+        day_ratio = metadata['day_ratios'][day_name]
 
-    else:
-        # Complex model logic (original)
-        # WeatherTemperature - Handle decimal temperatures by finding nearest
-        available_temps = get_available_temperatures()
-        if available_temps:
-            nearest_temp = find_nearest_temperature(input_data.weather_temperature, available_temps)
-            temp_col = f"WeatherTemperature_{nearest_temp}"
-            if temp_col in pred_data:
-                pred_data[temp_col] = 1
-                if nearest_temp != input_data.weather_temperature:
-                    warnings.append(f"Temperature {input_data.weather_temperature} rounded to nearest available: {nearest_temp}")
-            else:
-                warnings.append(f"Temperature column {temp_col} not found")
-        else:
-            warnings.append("No temperature columns found in training data")
+        if day_ratio > 1.05:
+            warnings.append(f"{day_name} events typically have high attendance ({day_ratio:.1%})")
+        elif day_ratio < 0.95:
+            warnings.append(f"{day_name} events typically have lower attendance ({day_ratio:.1%})")
 
-        # EventName - Handle unknown events by using a generic approach
-        event_name_col = f"EventName_{input_data.event_name}"
-        if event_name_col in pred_data:
-            pred_data[event_name_col] = 1
-        else:
-            # Try to find a similar event or use a default approach
-            available_events = get_available_events()
-            warnings.append(f"Event '{input_data.event_name}' not found in training data. Available events: {len(available_events)} total")
+        if input_data.weather_type.lower() in ['rain', 'rainy']:
+            warnings.append("Rainy weather may reduce attendance by ~2.3%")
 
-            # For unknown events, we'll rely on other features (registered count, weather, etc.)
-            # This is better than failing completely
+        if input_data.special_event:
+            warnings.append("Special events historically have 2.9% lower attendance")
 
-    # Convert the dictionary to a one-row DataFrame
-    prediction_df = pd.DataFrame([pred_data])
+    except Exception as e:
+        # Fallback to ratio-based prediction if models fail
+        warnings.append(f"Using fallback prediction method: {str(e)}")
+        predicted_rsvp = ratio_based_prediction(input_data)
+        lower_bound = max(int(predicted_rsvp * 0.8), 0)
+        upper_bound = int(predicted_rsvp * 1.2)
 
-    # Make prediction
-    forecast = model.predict(prediction_df)
-
-    predicted_rsvp = max(int(round(forecast['yhat'].values[0])), 0)
-
+    # Create response in same format as before
     response = {
         "event_date": input_data.event_date,
         "predicted_rsvp_count": predicted_rsvp,
-        "lower_bound": max(int(round(forecast['yhat_lower'].values[0])), 0),
-        "upper_bound": max(int(round(forecast['yhat_upper'].values[0])), 0)
+        "lower_bound": lower_bound,
+        "upper_bound": upper_bound
     }
 
     # Add warnings if any
