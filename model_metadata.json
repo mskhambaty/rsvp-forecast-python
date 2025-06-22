@@ -1,0 +1,56 @@
+{
+  "feature_cols": [
+    "RegisteredCount",
+    "is_rain",
+    "is_special",
+    "temp_normalized",
+    "temp_cold",
+    "temp_hot",
+    "sunset_normalized",
+    "sunset_early",
+    "sunset_late",
+    "is_monday",
+    "is_tuesday",
+    "is_wednesday",
+    "is_thursday",
+    "is_friday",
+    "is_saturday",
+    "is_sunday",
+    "is_sherullah",
+    "is_eid",
+    "is_urs",
+    "is_milad"
+  ],
+  "temp_stats": {
+    "mean": 50.648648648648646,
+    "std": 15.048470236421256
+  },
+  "sunset_stats": {
+    "mean": 1153.027027027027,
+    "std": 34.233257454059434
+  },
+  "base_ratio": 0.9511792352966084,
+  "day_ratios": {
+    "Monday": 0.9235251274581209,
+    "Tuesday": 0.9892918825561312,
+    "Wednesday": 0.8628302569670648,
+    "Thursday": 0.9106078665077473,
+    "Friday": 0.9663941871026339,
+    "Saturday": 1.0106039649608114,
+    "Sunday": 0.9579454253611557
+  },
+  "weather_ratios": {
+    "rain": 0.9314269039976656,
+    "clear": 0.9545319465081724
+  },
+  "event_ratios": {
+    "special": 0.9311944849529366,
+    "normal": 0.9605574219236034
+  },
+  "training_stats": {
+    "mean_attendance": 607.1351351351351,
+    "std_attendance": 184.42254654915618,
+    "mean_registered": 638.2972972972973,
+    "total_events": 37
+  }
+}
