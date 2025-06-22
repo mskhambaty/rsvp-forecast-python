@@ -43,6 +43,7 @@ class EventRSVPInput(BaseModel):
     weather_type: str
     special_event: bool
     event_name: str
+    sunset_time: str  # HH:MM format (24-hour) - for backward compatibility
 
     class Config:
         schema_extra = {
@@ -52,7 +53,8 @@ class EventRSVPInput(BaseModel):
                 "weather_temperature": 75.5,
                 "weather_type": "Clear",
                 "special_event": True,
-                "event_name": "Community Gathering"
+                "event_name": "Community Gathering",
+                "sunset_time": "19:30"
             }
         }
 
@@ -86,7 +88,8 @@ async def get_model_info():
             "weather_temperature": "number (will find nearest available temperature)",
             "weather_type": "string (Clear, Rain, or Rainy - case insensitive)",
             "special_event": "boolean (true for special events)",
-            "event_name": "string (if not in training data, will use other features)"
+            "event_name": "string (if not in training data, will use other features)",
+            "sunset_time": "string (HH:MM format, 24-hour)"
         },
         "notes": [
             "Temperature will be rounded to nearest available value from training data",
@@ -135,6 +138,17 @@ async def predict_event_rsvp(input_data: EventRSVPInput):
     if not input_data.event_name.strip():
         raise HTTPException(status_code=400, detail="Event name cannot be empty.")
 
+    # Validate sunset_time format (HH:MM)
+    try:
+        sunset_parts = input_data.sunset_time.split(":")
+        if len(sunset_parts) != 2:
+            raise ValueError("Invalid format")
+        hour, minute = int(sunset_parts[0]), int(sunset_parts[1])
+        if not (0 <= hour <= 23 and 0 <= minute <= 59):
+            raise ValueError("Invalid time values")
+    except (ValueError, AttributeError):
+        raise HTTPException(status_code=400, detail="Sunset time must be in HH:MM format (24-hour), e.g., '19:30'.")
+
     # --- Create Prediction DataFrame ---
     # Start with a dictionary for the single row of data
     pred_data = {'ds': event_date}
@@ -147,6 +161,9 @@ async def predict_event_rsvp(input_data: EventRSVPInput):
     pred_data['RegisteredCount_reg'] = input_data.registered_count
     pred_data['WeatherType_reg'] = 1 if input_data.weather_type.lower() in ["rain", "rainy"] else 0
     pred_data['SpecialEvent_reg'] = 1 if input_data.special_event else 0
+
+    # Note: sunset_time is accepted for backward compatibility but not used in current model
+    # To use sunset_time, the model would need to be retrained with sunset features
 
     # Tracking for debugging
     warnings = []

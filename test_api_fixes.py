@@ -75,7 +75,8 @@ def run_tests():
         "weather_temperature": 75.5,  # Should round to 75
         "weather_type": "Clear",
         "special_event": True,
-        "event_name": "Test Event"
+        "event_name": "Test Event",
+        "sunset_time": "19:30"
     })
     
     # Test 3: Rain weather type variations
@@ -85,9 +86,10 @@ def run_tests():
         "weather_temperature": 65,
         "weather_type": "rain",  # Lowercase
         "special_event": False,
-        "event_name": "Rainy Day Event"
+        "event_name": "Rainy Day Event",
+        "sunset_time": "18:45"
     })
-    
+
     # Test 4: Known event name
     if model_info and model_info['available_events']:
         known_event = model_info['available_events'][0]
@@ -97,9 +99,10 @@ def run_tests():
             "weather_temperature": 70,
             "weather_type": "Clear",
             "special_event": True,
-            "event_name": known_event
+            "event_name": known_event,
+            "sunset_time": "19:00"
         })
-    
+
     # Test 5: Temperature at edge of range
     if model_info:
         min_temp = model_info['temperature_range']['min']
@@ -109,7 +112,8 @@ def run_tests():
             "weather_temperature": min_temp - 5,  # Should round to min
             "weather_type": "Clear",
             "special_event": False,
-            "event_name": "Cold Weather Event"
+            "event_name": "Cold Weather Event",
+            "sunset_time": "20:15"
         })
     
     # Test 6: Invalid date format (should fail)
@@ -119,9 +123,10 @@ def run_tests():
         "weather_temperature": 75,
         "weather_type": "Clear",
         "special_event": False,
-        "event_name": "Invalid Date Test"
+        "event_name": "Invalid Date Test",
+        "sunset_time": "19:30"
     }, expected_success=False)
-    
+
     # Test 7: Negative registered count (should fail)
     test_prediction("Negative registered count", {
         "event_date": "2024-03-19",
@@ -129,9 +134,10 @@ def run_tests():
         "weather_temperature": 75,
         "weather_type": "Clear",
         "special_event": False,
-        "event_name": "Negative Test"
+        "event_name": "Negative Test",
+        "sunset_time": "19:30"
     }, expected_success=False)
-    
+
     # Test 8: Extreme temperature (should fail)
     test_prediction("Extreme temperature", {
         "event_date": "2024-03-20",
@@ -139,7 +145,8 @@ def run_tests():
         "weather_temperature": 200,  # Too high
         "weather_type": "Clear",
         "special_event": False,
-        "event_name": "Hot Test"
+        "event_name": "Hot Test",
+        "sunset_time": "19:30"
     }, expected_success=False)
     
     print("\n=== Test Summary ===")
