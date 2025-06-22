@@ -3,6 +3,7 @@ import numpy as np
 from prophet import Prophet
 from prophet.serialize import model_to_json
 import os
+import json
 
 print("Starting model creation process...")
 
@@ -10,122 +11,73 @@ try:
     # Load historical data
     print("Loading historical data...")
     data = pd.read_csv('historical_rsvp_data.csv')
-    
-    # Print some basic info to help diagnose issues
     print(f"Loaded {len(data)} rows of data")
-    print(f"Columns: {data.columns.tolist()}")
     
-    # Prepare data for Prophet (needs columns 'ds' and 'y')
-    print("Processing dates...")
-    
-    # Convert dates, assuming they're in the format 'DD-Mon' like '27-Feb'
-    # Adding a reference year (2023) to make them valid dates
+    # --- Data Preparation ---
+    print("Processing data...")
     data['ds'] = pd.to_datetime(data['ds'] + '-2023', format='%d-%b-%Y', errors='coerce')
-    
-    # Drop rows with invalid dates
-    data = data.dropna(subset=['ds'])
-    print(f"After date processing: {len(data)} valid rows")
-    
-    # Check if 'y' column exists and has numeric values
-    if 'y' in data.columns:
-        data['y'] = pd.to_numeric(data['y'], errors='coerce')
-        data = data.dropna(subset=['y'])
-        print(f"After numeric processing: {len(data)} valid rows")
-    else:
-        print("Warning: 'y' column not found. Using 'RegisteredCount' as target.")
-        if 'RegisteredCount' in data.columns:
-            data['y'] = pd.to_numeric(data['RegisteredCount'], errors='coerce')
-            data = data.dropna(subset=['y'])
-            print(f"After numeric processing: {len(data)} valid rows")
-        else:
-            raise ValueError("Neither 'y' nor 'RegisteredCount' columns found in data")
-    
-    # Create the additional regressor columns (matching the R implementation)
-    print("Creating regressor columns...")
-    
-    # Convert categorical columns to appropriate types
-    if 'DayOfWeek' not in data.columns:
-        # Extract day of week from date
-        data['DayOfWeek'] = data['ds'].dt.dayofweek
-    data['DayOfWeek_2'] = data['DayOfWeek'].astype('category')
-    
-    data['RegisteredCount_2'] = pd.to_numeric(data['RegisteredCount'], errors='coerce')
-    data.dropna(subset=['RegisteredCount_2'], inplace=True)
+    data['y'] = pd.to_numeric(data['y'], errors='coerce')
+    data.dropna(subset=['ds', 'y'], inplace=True)
+    print(f"After initial processing: {len(data)} valid rows")
 
-    data['WeatherTemperature_2'] = data['WeatherTemperature'].astype('category')
+    # --- Feature Engineering ---
+    print("Engineering features...")
+    # Create simple numeric regressors
+    data['RegisteredCount_reg'] = pd.to_numeric(data['RegisteredCount'], errors='coerce')
+    data['WeatherType_reg'] = np.where(data['WeatherType'] == 'Rain', 1, 0)
+    data['SpecialEvent_reg'] = np.where(data['SpecialEvent'] == 'Yes', 1, 0)
     
-    data['WeatherType_2'] = 0
-    data.loc[data['WeatherType'] == 'Rain', 'WeatherType_2'] = 1
+    # Prepare categorical features for one-hot encoding
+    data['DayOfWeek'] = data['ds'].dt.day_name()
+    categorical_features = ['EventName', 'DayOfWeek', 'WeatherTemperature']
+    for col in categorical_features:
+        data[col] = data[col].astype(str)
+
+    # One-hot encode the categorical features
+    data_encoded = pd.get_dummies(data, columns=categorical_features, prefix=categorical_features)
     
-    data['SpecialEvent_2'] = 0
-    data.loc[data['SpecialEvent'] == 'Yes', 'SpecialEvent_2'] = 1
+    # --- Create Final DataFrame for Prophet ---
+    # Start with essential columns
+    final_cols = ['ds', 'y']
+    # Add the simple numeric regressors
+    final_cols.extend(['RegisteredCount_reg', 'WeatherType_reg', 'SpecialEvent_reg'])
+    # Add the new one-hot encoded columns
+    dummy_cols = [col for col in data_encoded.columns if any(col.startswith(prefix + '_') for prefix in categorical_features)]
+    final_cols.extend(dummy_cols)
     
-    # **FIX:** Clean up event names to prevent Prophet from trying to parse them as dates
-    # by replacing date-like separators before converting to a category.
-    data['EventName'] = data['EventName'].str.replace('/', ' ', regex=False).str.replace('-', ' ', regex=False)
-    data['EventName_2'] = data['EventName'].astype('category')
-    
-    # Basic data validation
-    if len(data) < 5:
-        raise ValueError(f"Not enough valid data points for training (only {len(data)} rows)")
-    
+    # Create the final dataframe, dropping any rows with missing values in regressors
+    final_df = data_encoded[final_cols].dropna()
+    print(f"Final training data has {len(final_df)} rows and {len(final_df.columns)} columns.")
+
+    # --- Save Model Columns ---
+    regressor_names = [col for col in final_df.columns if col not in ['ds', 'y']]
+    with open('model_columns.json', 'w') as fout:
+        json.dump(regressor_names, fout)
+    print(f"Saved {len(regressor_names)} regressor column names to model_columns.json")
+
+    # --- Train Prophet Model ---
     print("Creating and training Prophet model...")
-    # Create model with parameters matching the R implementation
     model = Prophet(
         daily_seasonality=True,
         yearly_seasonality=True,
         weekly_seasonality=True,
         seasonality_mode='multiplicative'
     )
+
+    for regressor in regressor_names:
+        model.add_regressor(regressor)
+
+    model.fit(final_df)
     
-    # Add regressors
-    model.add_regressor('DayOfWeek_2')
-    model.add_regressor('RegisteredCount_2')
-    model.add_regressor('WeatherTemperature_2')
-    model.add_regressor('WeatherType_2')
-    model.add_regressor('SpecialEvent_2')
-    model.add_regressor('EventName_2')
-    
-    # Fit the model on the processed data with regressors
-    cols_to_use = ['ds', 'y', 'DayOfWeek_2', 'RegisteredCount_2', 'WeatherTemperature_2', 
-                   'WeatherType_2', 'SpecialEvent_2', 'EventName_2']
-    model.fit(data[cols_to_use])
-    
+    # --- Save Model ---
     print("Serializing model to JSON...")
-    # Serialize model to JSON
     with open('serialized_model.json', 'w') as fout:
         fout.write(model_to_json(model))
     
-    # Validate that the file was created and has content
     file_size = os.path.getsize('serialized_model.json')
     print(f"Model saved to serialized_model.json ({file_size} bytes)")
     
-    print("Model creation completed successfully!")
+    print("\nModel creation completed successfully!")
 
 except Exception as e:
-    print(f"Error creating model: {str(e)}")
-    
-    # Create a simple fallback model if the main one fails
-    print("Creating fallback model...")
-    
-    # Create synthetic data for a simple model
-    synthetic_dates = pd.date_range(start='2023-01-01', periods=30, freq='D')
-    synthetic_y = np.random.randint(500, 900, size=30)
-    
-    synthetic_data = pd.DataFrame({
-        'ds': synthetic_dates,
-        'y': synthetic_y
-    })
-    
-    # Create and fit a simplified model
-    fallback_model = Prophet(
-        daily_seasonality=True,
-        seasonality_mode='multiplicative'
-    )
-    fallback_model.fit(synthetic_data)
-    
-    # Save the fallback model
-    with open('serialized_model.json', 'w') as fout:
-        fout.write(model_to_json(fallback_model))
-    
-    print("Fallback model created and saved")
+    print(f"\nError creating model: {str(e)}")
