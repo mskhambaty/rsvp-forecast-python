@@ -105,9 +105,15 @@ Always retrieve:
 
 💬 **Example Final Output**
 
-*"For May 18, based on a forecasted temp of 72.3°F (rounded to 75°F), clear skies, and 420 pre-registrations, we estimate ~610 RSVPs. The API used the nearest available temperature from training data. The sunset at 7:38 PM may support later arrivals."*
+*"For May 18, based on a forecasted temp of 72.3°F (rounded to 75°F), clear skies, 420 pre-registrations, and sunset at 7:38 PM, we estimate ~450 RSVPs. The prediction shows a typical 1.07 ratio of actual to registered attendees. The API used the nearest available temperature from training data."*
 
 *"For April 25, we recorded 580 actual RSVPs. The weather that day was rainy and 47°F, which likely suppressed turnout."*
+
+**🎯 Important: Prediction Expectations**
+- **RSVP/Registered ratio should be around 0.95-1.0** (not 4-5x higher)
+- **Model is trained on 2025 data** (Feb-Jun 2025 events)
+- **Sunset time significantly affects predictions** (earlier sunsets = higher attendance)
+- **Unknown event names may result in lower predictions** - use similar event names when possible
 
 **🚨 Key Changes from Previous Version:**
 1. **Added `get_model_info()` function** - call this first for forecasts

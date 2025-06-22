@@ -15,10 +15,14 @@ try:
     
     # --- Data Preparation ---
     print("Processing data...")
-    data['ds'] = pd.to_datetime(data['ds'] + '-2023', format='%d-%b-%Y', errors='coerce')
+    data['ds'] = pd.to_datetime(data['ds'] + '-2025', format='%d-%b-%Y', errors='coerce')
     data['y'] = pd.to_numeric(data['y'], errors='coerce')
     data.dropna(subset=['ds', 'y'], inplace=True)
     print(f"After initial processing: {len(data)} valid rows")
+
+    # Check RSVP to Registered ratios
+    data['ratio'] = data['y'] / pd.to_numeric(data['RegisteredCount'], errors='coerce')
+    print(f"RSVP/Registered ratio - Mean: {data['ratio'].mean():.3f}, Median: {data['ratio'].median():.3f}")
 
     # --- Feature Engineering ---
     print("Engineering features...")
