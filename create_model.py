@@ -49,12 +49,12 @@ try:
         data['DayOfWeek'] = data['ds'].dt.dayofweek
     data['DayOfWeek_2'] = data['DayOfWeek'].astype('category')
     
-    # Binary columns (0/1)
-    data['RegisteredCount_2'] = data['RegisteredCount'].copy()
-    data.loc[data['RegisteredCount_2'] == 'Rain', 'RegisteredCount_2'] = 1
-    data.loc[data['RegisteredCount_2'] != 1, 'RegisteredCount_2'] = 0
-    data['RegisteredCount_2'] = data['RegisteredCount_2'].astype(float)
-    
+    # CORRECTED: Use the 'RegisteredCount' column directly as a numerical regressor.
+    # The original code had a bug that incorrectly processed this column.
+    data['RegisteredCount_2'] = pd.to_numeric(data['RegisteredCount'], errors='coerce')
+    # Drop rows where 'RegisteredCount_2' could not be converted to a number
+    data.dropna(subset=['RegisteredCount_2'], inplace=True)
+
     data['WeatherTemperature_2'] = data['WeatherTemperature'].astype('category')
     
     data['WeatherType_2'] = 0
