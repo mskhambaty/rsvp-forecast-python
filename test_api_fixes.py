@@ -68,15 +68,37 @@ def run_tests():
         print("Cannot continue without model info")
         return
     
-    # Test 2: Valid prediction with decimal temperature
-    test_prediction("Decimal temperature handling", {
+    # Test 2: Valid prediction with decimal temperature and sunset time
+    test_prediction("Decimal temperature and sunset time handling", {
         "event_date": "2024-03-15",
         "registered_count": 500,
         "weather_temperature": 75.5,  # Should round to 75
         "weather_type": "Clear",
         "special_event": True,
         "event_name": "Test Event",
-        "sunset_time": "19:30"
+        "sunset_time": "19:30"  # Normal sunset time
+    })
+
+    # Test 2b: Early sunset time
+    test_prediction("Early sunset time", {
+        "event_date": "2024-02-15",
+        "registered_count": 400,
+        "weather_temperature": 40,
+        "weather_type": "Clear",
+        "special_event": False,
+        "event_name": "Winter Event",
+        "sunset_time": "18:45"  # Early sunset
+    })
+
+    # Test 2c: Late sunset time
+    test_prediction("Late sunset time", {
+        "event_date": "2024-06-15",
+        "registered_count": 600,
+        "weather_temperature": 80,
+        "weather_type": "Clear",
+        "special_event": True,
+        "event_name": "Summer Event",
+        "sunset_time": "20:15"  # Late sunset
     })
     
     # Test 3: Rain weather type variations

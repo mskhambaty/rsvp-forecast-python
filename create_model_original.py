@@ -26,45 +26,10 @@ try:
     data['RegisteredCount_reg'] = pd.to_numeric(data['RegisteredCount'], errors='coerce')
     data['WeatherType_reg'] = np.where(data['WeatherType'] == 'Rain', 1, 0)
     data['SpecialEvent_reg'] = np.where(data['SpecialEvent'] == 'Yes', 1, 0)
-
-    # Process sunset time features
-    def process_sunset_time(sunset_str):
-        """Convert sunset time to minutes since midnight"""
-        if pd.isna(sunset_str):
-            return None
-        try:
-            hour, minute = map(int, str(sunset_str).split(':'))
-            return hour * 60 + minute
-        except:
-            return None
-
-    data['SunsetMinutes'] = data['SunsetTime'].apply(process_sunset_time)
-    data['SunsetMinutes_reg'] = pd.to_numeric(data['SunsetMinutes'], errors='coerce')
-
-    # Create sunset hour feature (for categorical analysis)
-    data['SunsetHour'] = data['SunsetTime'].apply(lambda x: int(str(x).split(':')[0]) if pd.notna(x) else None)
-
-    # Create sunset category feature
-    def categorize_sunset(sunset_str):
-        """Categorize sunset time into Early/Normal/Late"""
-        if pd.isna(sunset_str):
-            return 'Unknown'
-        try:
-            hour = int(str(sunset_str).split(':')[0])
-            if hour < 19:
-                return 'Early'
-            elif hour < 20:
-                return 'Normal'
-            else:
-                return 'Late'
-        except:
-            return 'Unknown'
-
-    data['SunsetCategory'] = data['SunsetTime'].apply(categorize_sunset)
     
     # Prepare categorical features for one-hot encoding
     data['DayOfWeek'] = data['ds'].dt.day_name()
-    categorical_features = ['EventName', 'DayOfWeek', 'WeatherTemperature', 'SunsetCategory', 'SunsetHour']
+    categorical_features = ['EventName', 'DayOfWeek', 'WeatherTemperature']
     for col in categorical_features:
         data[col] = data[col].astype(str)
 
@@ -75,7 +40,7 @@ try:
     # Start with essential columns
     final_cols = ['ds', 'y']
     # Add the simple numeric regressors
-    final_cols.extend(['RegisteredCount_reg', 'WeatherType_reg', 'SpecialEvent_reg', 'SunsetMinutes_reg'])
+    final_cols.extend(['RegisteredCount_reg', 'WeatherType_reg', 'SpecialEvent_reg'])
     # Add the new one-hot encoded columns
     dummy_cols = [col for col in data_encoded.columns if any(col.startswith(prefix + '_') for prefix in categorical_features)]
     final_cols.extend(dummy_cols)
@@ -83,24 +48,6 @@ try:
     # Create the final dataframe, dropping any rows with missing values in regressors
     final_df = data_encoded[final_cols].dropna()
     print(f"Final training data has {len(final_df)} rows and {len(final_df.columns)} columns.")
-
-    # Debug: Check sunset features
-    sunset_cols = [col for col in final_df.columns if 'sunset' in col.lower()]
-    print(f"Sunset columns in final data: {sunset_cols}")
-    if 'SunsetMinutes_reg' in final_df.columns:
-        print(f"SunsetMinutes_reg range: {final_df['SunsetMinutes_reg'].min()} to {final_df['SunsetMinutes_reg'].max()}")
-
-    # Check for any infinite or very large values
-    numeric_cols = final_df.select_dtypes(include=[np.number]).columns
-    for col in numeric_cols:
-        if final_df[col].abs().max() > 10000:
-            print(f"WARNING: Large values in {col}: max={final_df[col].max()}, min={final_df[col].min()}")
-        if np.isinf(final_df[col]).any():
-            print(f"WARNING: Infinite values in {col}")
-            final_df[col] = final_df[col].replace([np.inf, -np.inf], np.nan)
-
-    # Final cleanup
-    final_df = final_df.dropna()
 
     # --- Save Model Columns ---
     regressor_names = [col for col in final_df.columns if col not in ['ds', 'y']]

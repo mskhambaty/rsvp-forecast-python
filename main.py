@@ -162,8 +162,35 @@ async def predict_event_rsvp(input_data: EventRSVPInput):
     pred_data['WeatherType_reg'] = 1 if input_data.weather_type.lower() in ["rain", "rainy"] else 0
     pred_data['SpecialEvent_reg'] = 1 if input_data.special_event else 0
 
-    # Note: sunset_time is accepted for backward compatibility but not used in current model
-    # To use sunset_time, the model would need to be retrained with sunset features
+    # Process sunset time features
+    try:
+        sunset_parts = input_data.sunset_time.split(":")
+        sunset_hour = int(sunset_parts[0])
+        sunset_minute = int(sunset_parts[1])
+        sunset_minutes = sunset_hour * 60 + sunset_minute
+        pred_data['SunsetMinutes_reg'] = sunset_minutes
+
+        # Set sunset category
+        if sunset_hour < 19:
+            sunset_category = 'Early'
+        elif sunset_hour < 20:
+            sunset_category = 'Normal'
+        else:
+            sunset_category = 'Late'
+
+        # Set sunset hour and category one-hot features
+        sunset_hour_col = f"SunsetHour_{sunset_hour}"
+        if sunset_hour_col in pred_data:
+            pred_data[sunset_hour_col] = 1
+
+        sunset_category_col = f"SunsetCategory_{sunset_category}"
+        if sunset_category_col in pred_data:
+            pred_data[sunset_category_col] = 1
+
+    except (ValueError, AttributeError) as e:
+        warnings.append(f"Error processing sunset time: {e}")
+        # Set default values if sunset processing fails
+        pred_data['SunsetMinutes_reg'] = 1140  # Default to 19:00 (19*60 = 1140 minutes)
 
     # Tracking for debugging
     warnings = []
