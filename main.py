@@ -18,23 +18,32 @@ regressor_columns = []
 @app.on_event("startup")
 def load_model():
     global model, regressor_columns
-    try:
-        print("Loading Prophet model...")
-        with open("serialized_model.json", "r") as fin:
-            model = model_from_json(fin.read())
-        print("Model loaded successfully.")
-    except FileNotFoundError:
-        print("WARNING: serialized_model.json not found.")
-        model = None
-    
-    try:
-        print("Loading regressor columns...")
-        with open("model_columns.json", "r") as fin:
-            regressor_columns = json.load(fin)
-        print("Regressor columns loaded successfully.")
-    except FileNotFoundError:
-        print("WARNING: model_columns.json not found.")
-        regressor_columns = []
+    # Try simplified model first, fallback to complex model
+    model_files = [
+        ("serialized_model_simplified.json", "model_columns_simplified.json", "simplified"),
+        ("serialized_model.json", "model_columns.json", "complex")
+    ]
+
+    for model_file, columns_file, model_type in model_files:
+        try:
+            print(f"Loading {model_type} Prophet model...")
+            with open(model_file, "r") as fin:
+                model = model_from_json(fin.read())
+            print(f"{model_type.title()} model loaded successfully.")
+
+            with open(columns_file, "r") as fin:
+                regressor_columns = json.load(fin)
+            print(f"{model_type.title()} regressor columns loaded successfully.")
+            return  # Success, exit function
+
+        except FileNotFoundError:
+            print(f"WARNING: {model_type} model files not found.")
+            continue
+
+    # If we get here, no model was loaded
+    print("ERROR: No model files found.")
+    model = None
+    regressor_columns = []
 
 class EventRSVPInput(BaseModel):
     event_date: str
@@ -203,31 +212,88 @@ async def predict_event_rsvp(input_data: EventRSVPInput):
     else:
         warnings.append(f"Day of week '{event_date.day_name()}' not found in training data")
 
-    # WeatherTemperature - Handle decimal temperatures by finding nearest
-    available_temps = get_available_temperatures()
-    if available_temps:
-        nearest_temp = find_nearest_temperature(input_data.weather_temperature, available_temps)
-        temp_col = f"WeatherTemperature_{nearest_temp}"
+    # Check if we're using simplified or complex model
+    using_simplified = any(col.startswith("EventType_") for col in regressor_columns)
+
+    if using_simplified:
+        # Simplified model logic
+        # Temperature categories
+        temp = input_data.weather_temperature
+        if temp < 40:
+            temp_category = 'Cold'
+        elif temp < 60:
+            temp_category = 'Cool'
+        elif temp < 80:
+            temp_category = 'Warm'
+        else:
+            temp_category = 'Hot'
+
+        temp_col = f"TempCategory_{temp_category}"
         if temp_col in pred_data:
             pred_data[temp_col] = 1
-            if nearest_temp != input_data.weather_temperature:
-                warnings.append(f"Temperature {input_data.weather_temperature} rounded to nearest available: {nearest_temp}")
+
+        # Event type categorization - default to most common type if unknown
+        event_name = input_data.event_name.lower()
+        if 'sherullah' in event_name:
+            event_type = 'Sherullah'
+        elif 'urs' in event_name:
+            event_type = 'Urs'
+        elif 'eid' in event_name or 'milad' in event_name:
+            event_type = 'Celebration'
+        elif 'raat' in event_name or 'daris' in event_name:
+            event_type = 'Educational'
         else:
-            warnings.append(f"Temperature column {temp_col} not found")
-    else:
-        warnings.append("No temperature columns found in training data")
+            # Default to Sherullah as it's most common in training data
+            event_type = 'Sherullah'
+            warnings.append(f"Unknown event type, defaulting to Sherullah category")
 
-    # EventName - Handle unknown events by using a generic approach
-    event_name_col = f"EventName_{input_data.event_name}"
-    if event_name_col in pred_data:
-        pred_data[event_name_col] = 1
-    else:
-        # Try to find a similar event or use a default approach
-        available_events = get_available_events()
-        warnings.append(f"Event '{input_data.event_name}' not found in training data. Available events: {len(available_events)} total")
+        event_type_col = f"EventType_{event_type}"
+        if event_type_col in pred_data:
+            pred_data[event_type_col] = 1
 
-        # For unknown events, we'll rely on other features (registered count, weather, etc.)
-        # This is better than failing completely
+        # Sunset category
+        try:
+            sunset_hour = int(input_data.sunset_time.split(':')[0])
+            if sunset_hour < 19:
+                sunset_category = 'Early'
+            elif sunset_hour < 20:
+                sunset_category = 'Normal'
+            else:
+                sunset_category = 'Late'
+
+            sunset_cat_col = f"SunsetCategory_{sunset_category}"
+            if sunset_cat_col in pred_data:
+                pred_data[sunset_cat_col] = 1
+        except:
+            warnings.append("Error processing sunset category")
+
+    else:
+        # Complex model logic (original)
+        # WeatherTemperature - Handle decimal temperatures by finding nearest
+        available_temps = get_available_temperatures()
+        if available_temps:
+            nearest_temp = find_nearest_temperature(input_data.weather_temperature, available_temps)
+            temp_col = f"WeatherTemperature_{nearest_temp}"
+            if temp_col in pred_data:
+                pred_data[temp_col] = 1
+                if nearest_temp != input_data.weather_temperature:
+                    warnings.append(f"Temperature {input_data.weather_temperature} rounded to nearest available: {nearest_temp}")
+            else:
+                warnings.append(f"Temperature column {temp_col} not found")
+        else:
+            warnings.append("No temperature columns found in training data")
+
+        # EventName - Handle unknown events by using a generic approach
+        event_name_col = f"EventName_{input_data.event_name}"
+        if event_name_col in pred_data:
+            pred_data[event_name_col] = 1
+        else:
+            # Try to find a similar event or use a default approach
+            available_events = get_available_events()
+            warnings.append(f"Event '{input_data.event_name}' not found in training data. Available events: {len(available_events)} total")
+
+            # For unknown events, we'll rely on other features (registered count, weather, etc.)
+            # This is better than failing completely
 
     # Convert the dictionary to a one-row DataFrame
     prediction_df = pd.DataFrame([pred_data])
