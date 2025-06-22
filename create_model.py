@@ -49,10 +49,7 @@ try:
         data['DayOfWeek'] = data['ds'].dt.dayofweek
     data['DayOfWeek_2'] = data['DayOfWeek'].astype('category')
     
-    # CORRECTED: Use the 'RegisteredCount' column directly as a numerical regressor.
-    # The original code had a bug that incorrectly processed this column.
     data['RegisteredCount_2'] = pd.to_numeric(data['RegisteredCount'], errors='coerce')
-    # Drop rows where 'RegisteredCount_2' could not be converted to a number
     data.dropna(subset=['RegisteredCount_2'], inplace=True)
 
     data['WeatherTemperature_2'] = data['WeatherTemperature'].astype('category')
@@ -63,6 +60,9 @@ try:
     data['SpecialEvent_2'] = 0
     data.loc[data['SpecialEvent'] == 'Yes', 'SpecialEvent_2'] = 1
     
+    # **FIX:** Clean up event names to prevent Prophet from trying to parse them as dates
+    # by replacing date-like separators before converting to a category.
+    data['EventName'] = data['EventName'].str.replace('/', ' ', regex=False).str.replace('-', ' ', regex=False)
     data['EventName_2'] = data['EventName'].astype('category')
     
     # Basic data validation
@@ -75,7 +75,7 @@ try:
         daily_seasonality=True,
         yearly_seasonality=True,
         weekly_seasonality=True,
-        seasonality_mode='multiplicative'  # Changed from default 'additive' to match R
+        seasonality_mode='multiplicative'
     )
     
     # Add regressors
@@ -110,7 +110,7 @@ except Exception as e:
     
     # Create synthetic data for a simple model
     synthetic_dates = pd.date_range(start='2023-01-01', periods=30, freq='D')
-    synthetic_y = np.random.randint(500, 900, size=30)  # Random values between 500-900
+    synthetic_y = np.random.randint(500, 900, size=30)
     
     synthetic_data = pd.DataFrame({
         'ds': synthetic_dates,
