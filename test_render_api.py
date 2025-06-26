@@ -1,0 +1,127 @@
+#!/usr/bin/env python3
+"""
+Test the render.com deployed API with exact payloads
+"""
+import requests
+import json
+
+RENDER_URL = "https://rsvp-forecast-python.onrender.com"
+
+# Exact payloads from the user
+test_payloads = [
+    {
+        "event_date": "2025-06-26",
+        "registered_count": 358,
+        "weather_temperature": 93.6,
+        "weather_type": "Clear",
+        "special_event": True,
+        "event_name": "Ashara 1447H - Pehli Tarikh",
+        "sunset_time": "20:30"
+    },
+    {
+        "event_date": "2025-06-27",
+        "registered_count": 305,
+        "weather_temperature": 87.3,
+        "weather_type": "Clear",
+        "special_event": True,
+        "event_name": "Ashara 1447H - 2nd Muharram",
+        "sunset_time": "20:30"
+    },
+    {
+        "event_date": "2025-06-28",
+        "registered_count": 302,
+        "weather_temperature": 88.7,
+        "weather_type": "Clear",
+        "special_event": True,
+        "event_name": "Ashara 1447H - 3rd Muharram",
+        "sunset_time": "20:30"
+    }
+]
+
+def test_render_api():
+    print("=== TESTING RENDER.COM DEPLOYED API ===")
+    print(f"URL: {RENDER_URL}")
+    
+    # Test API connection
+    try:
+        print("\nTesting connection...")
+        response = requests.get(f"{RENDER_URL}/", timeout=30)
+        if response.status_code == 200:
+            data = response.json()
+            print(f"✓ API running: {data.get('message', 'Unknown')}")
+            print(f"✓ Model loaded: {data.get('model_loaded', 'Unknown')}")
+        else:
+            print(f"✗ API connection failed: {response.status_code}")
+            print(f"Response: {response.text}")
+            return
+    except requests.exceptions.Timeout:
+        print("✗ API connection timeout (30s)")
+        return
+    except Exception as e:
+        print(f"✗ Cannot connect to API: {e}")
+        return
+    
+    # Test model info
+    try:
+        print("\nTesting /model_info...")
+        response = requests.get(f"{RENDER_URL}/model_info", timeout=30)
+        if response.status_code == 200:
+            info = response.json()
+            print(f"✓ Model type: {info.get('model_type', 'Unknown')}")
+            print(f"✓ Training events: {info.get('training_events', 'Unknown')}")
+            print(f"✓ Average error: {info.get('average_error', 'Unknown')}")
+        else:
+            print(f"✗ Model info failed: {response.status_code}")
+            print(f"Response: {response.text}")
+    except Exception as e:
+        print(f"✗ Model info error: {e}")
+    
+    # Test each payload
+    for i, payload in enumerate(test_payloads, 1):
+        print(f"\n--- Test {i}: {payload['event_name']} ---")
+        print(f"Date: {payload['event_date']}")
+        print(f"Registered: {payload['registered_count']}")
+        print(f"Temperature: {payload['weather_temperature']}°F")
+        print(f"Special Event: {payload['special_event']}")
+        
+        try:
+            response = requests.post(f"{RENDER_URL}/predict_event_rsvp", json=payload, timeout=30)
+            
+            print(f"Status Code: {response.status_code}")
+            
+            if response.status_code == 200:
+                result = response.json()
+                predicted = result.get("predicted_rsvp_count", "N/A")
+                lower = result.get("lower_bound", "N/A")
+                upper = result.get("upper_bound", "N/A")
+                warnings = result.get("warnings", [])
+                
+                print(f"✓ Response received")
+                print(f"  Predicted RSVP: {predicted}")
+                print(f"  Range: {lower} - {upper}")
+                print(f"  Ratio: {predicted/payload['registered_count']:.3f}" if predicted != "N/A" and predicted != 0 else "  Ratio: N/A")
+                
+                if warnings:
+                    print(f"  Warnings: {warnings}")
+                
+                if predicted == 0:
+                    print(f"  ⚠️ ISSUE: Render API returned 0 prediction!")
+                    print(f"  Full response: {json.dumps(result, indent=2)}")
+                else:
+                    print(f"  ✓ Prediction looks good: {predicted}")
+                    
+            elif response.status_code == 500:
+                print(f"✗ Server Error 500")
+                print(f"  This suggests the deployed version has issues")
+                print(f"  Response: {response.text}")
+            else:
+                print(f"✗ API Error {response.status_code}")
+                print(f"  Response: {response.text}")
+                
+        except requests.exceptions.Timeout:
+            print(f"✗ Request timeout (30s)")
+        except Exception as e:
+            print(f"✗ Request error: {e}")
+
+if __name__ == "__main__":
+    test_render_api()
