@@ -2,7 +2,7 @@ FROM python:3.9-slim
 
 WORKDIR /app
 
-# Install system dependencies required for Prophet
+# Install system dependencies required for scikit-learn
 RUN apt-get update && apt-get install -y \
     build-essential \
     gcc \
@@ -15,8 +15,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY . /app/
 
-# Create serialized model
-RUN python create_model.py
+# Create practical models (Random Forest + Linear Regression)
+RUN python create_practical_model.py
 
 # Expose the port (Render will override this with its own PORT env var)
 EXPOSE 8000
