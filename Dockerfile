@@ -1,26 +1,19 @@
+# Use official lightweight Python image
 FROM python:3.9-slim
 
 WORKDIR /app
 
-# Install system dependencies required for scikit-learn
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    gcc \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy requirements and install Python dependencies
-COPY requirements.txt .
+COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
-COPY . /app/
+COPY . /app
 
-# Create practical models (Random Forest + Linear Regression)
+# Ensure the CSV sits in the correct spot
+# If you're using another CSV name or path, adjust this step accordingly
+# e.g. if you previously had data/rsvp_data.csv, you can symlink:
+RUN ln -sf historical_rsvp_data.csv rsvp_data.csv
+
 RUN python create_practical_model.py
 
-# Expose the port (Render will override this with its own PORT env var)
 EXPOSE 8000
-
-# Start the FastAPI application with Uvicorn
-# Using PORT env var that Render provides
-CMD uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
