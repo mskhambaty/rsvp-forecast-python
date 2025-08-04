@@ -1,87 +1,46 @@
-#!/usr/bin/env python3
-"""
-Train RandomForest + LinearRegression on historic RSVP-event data.
-Relies on 'historical_rsvp_data.csv' in project root (no `data/` folder).
-"""
-
-import os, json, pickle
 import pandas as pd
-from sklearn.ensemble import RandomForestRegressor
+import pickle
 from sklearn.linear_model import LinearRegression
-from sklearn.model_selection import cross_val_score
-from sklearn.utils.validation import check_X_y
-
-# === CONFIG ===
-CSV_PATH = os.getenv("RSVP_CSV_PATH", "historical_rsvp_data.csv")
-FEATURES = [
-    "registered_count",
-    "days_to_event",
-    "venue_good",
-    "venue_bad",
-    "special_event",
-    # add any other features here, matching the REST API name in main.py
-]
-Y_COL = os.getenv("APPROXACTUAL_COL", "ActualCount")
+from sklearn.ensemble import RandomForestRegressor
 
 def load_and_prepare():
-    # Load CSV, but if it's missing, error with clear guidance
-    if not os.path.exists(CSV_PATH):
-        raise FileNotFoundError(f"\nERROR: CSV_PATH '{CSV_PATH}' not found. "
-                                f"Expected your data file to exist in project root.\n")
+    print("=== CREATING PRACTICAL FORECASTING MODELS ===")
+    print("Loading events from historical_rsvp_data.csv")
+    df = pd.read_csv("historical_rsvp_data.csv")
 
-    print(f"Loading events from {CSV_PATH}")
-    df = pd.read_csv(CSV_PATH)
-
-    for col in (Y_COL, "RegisteredCount"):
+    required_columns = ['ds', 'y', 'RegisteredCount', 'WeatherTemperature', 'SunsetTime']
+    for col in required_columns:
         if col not in df.columns:
             raise KeyError(f"ERROR: Required column '{col}' not found in CSV.")
 
-    df = df.dropna(subset=[Y_COL])
-    print(f"Training on {len(df)} rows after dropping missing {Y_COL}")
-
-    df = df.rename(columns={
-        "RegisteredCount": "registered_count",
-        Y_COL: "y",
-        # map other columns if necessary:
-        "VenueIsGood": "venue_good",
-        "VenueIsBad": "venue_bad",
-        "SpecialEvent": "special_event",
-    })
+    df = df.dropna(subset=required_columns)
+    df['SunsetHour'] = df['SunsetTime'].str.split(":").str[0].astype(int)
+    df['EventMonth'] = pd.to_datetime(df['ds'], errors='coerce').dt.month.fillna(0).astype(int)
+    df['EventWeekday'] = pd.to_datetime(df['ds'], errors='coerce').dt.weekday.fillna(0).astype(int)
 
     return df
 
 def create_practical_model():
     df = load_and_prepare()
-    X = df[FEATURES]
-    y = df["y"]
 
-    X_checked, y_checked = check_X_y(X.values, y.values)
-    print("✅ Training features and target validated — no NaN")
+    X = df[['RegisteredCount', 'WeatherTemperature', 'SunsetHour', 'EventMonth', 'EventWeekday']]
+    y = df['y']  # Updated from 'ActualCount'
 
-    rf = RandomForestRegressor(n_estimators=200, max_depth=10,
-                               random_state=42, n_jobs=-1)
-    rf.fit(X_checked, y_checked)
-    print("  RF CV score:", cross_val_score(rf, X_checked, y_checked, cv=5).mean())
+    rf_model = RandomForestRegressor(n_estimators=100, random_state=42)
+    rf_model.fit(X, y)
+    print("✅ Random Forest model trained.")
 
-    lr = LinearRegression()
-    lr.fit(X_checked, y_checked)
-    print("  LR  CV score:", cross_val_score(lr, X_checked, y_checked, cv=5).mean())
-
-    metadata = {
-        "feature_order": FEATURES,
-        "y_column": Y_COL,
-        "training_samples": len(df),
-    }
+    lr_model = LinearRegression()
+    lr_model.fit(X, y)
+    print("✅ Linear Regression model trained.")
 
     with open("rf_model.pkl", "wb") as f:
-        pickle.dump(rf, f)
-    with open("lr_model.pkl", "wb") as f:
-        pickle.dump(lr, f)
-    with open("model_metadata.json", "w") as f:
-        json.dump(metadata, f, indent=2)
+        pickle.dump(rf_model, f)
 
-    print("✅ Models & metadata saved successfully.")
+    with open("lr_model.pkl", "wb") as f:
+        pickle.dump(lr_model, f)
+
+    print("✅ Models saved as rf_model.pkl and lr_model.pkl")
 
 if __name__ == "__main__":
-    print("\n=== CREATING PRACTICAL FORECASTING MODELS ===")
     create_practical_model()
