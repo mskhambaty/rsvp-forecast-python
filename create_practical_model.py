@@ -1,59 +1,95 @@
+#!/usr/bin/env python3
+"""
+Train two models (Random-Forest & LinearRegression) to forecast RSVP counts,
+engineer features automatically, and write:
+
+• rf_model.pkl / lr_model.pkl
+• model_metadata.json  (single source of truth for feature_cols + target + version)
+"""
+from __future__ import annotations
+
 import json
-import pandas as pd
+import logging
 import pickle
 from datetime import date
+from pathlib import Path
+
+import pandas as pd
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.linear_model import LinearRegression
 
-def load_and_prepare(csv_path: str = "historical_rsvp_data.csv") -> pd.DataFrame:
-    print("=== Loading and preparing data")
+CSV_PATH = Path("historical_rsvp_data.csv")
+RF_MODEL_PATH = Path("rf_model.pkl")
+LR_MODEL_PATH = Path("lr_model.pkl")
+METADATA_PATH = Path("model_metadata.json")
+
+logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
+logger = logging.getLogger(__name__)
+
+
+# --------------------------------------------------------------------------- #
+# Data prep                                                                   #
+# --------------------------------------------------------------------------- #
+def load_and_prepare(csv_path: Path = CSV_PATH) -> pd.DataFrame:
+    """Load CSV, validate required columns, create engineered features."""
+    required = {"ds", "y", "RegisteredCount", "WeatherTemperature", "SunsetTime"}
     df = pd.read_csv(csv_path)
 
-    required = ['ds', 'y', 'RegisteredCount',
-                'WeatherTemperature', 'SunsetTime']
-    missing = set(required) - set(df.columns)
+    missing = required - set(df.columns)
     if missing:
         raise KeyError(f"Missing required columns: {missing}")
 
-    df = df.dropna(subset=required)
-    df['SunsetHour'] = df['SunsetTime'].str.split(":").str[0].astype(int)
-    ts = pd.to_datetime(df['ds'], format='%Y-%m-%d', errors='coerce')
-    df['EventMonth'] = ts.dt.month.fillna(0).astype(int)
-    df['EventWeekday'] = ts.dt.weekday.fillna(0).astype(int)
+    # --- basic cleaning ---------------------------------------------------- #
+    df = df.dropna(subset=list(required))
+    df["SunsetHour"] = df["SunsetTime"].str.split(":").str[0].astype(int)
+
+    ts = pd.to_datetime(df["ds"], format="%Y-%m-%d", errors="coerce")
+    df["EventMonth"] = ts.dt.month.astype(int)
+    df["EventWeekday"] = ts.dt.weekday.astype(int)
+
+    # --- optional categorical features ------------------------------------- #
+    if "WeatherType" in df.columns:
+        df = pd.get_dummies(df, columns=["WeatherType"], drop_first=True)
+
+    if "SpecialEvent" in df.columns:
+        df["is_special"] = df["SpecialEvent"].notna().astype(int)
 
     return df
 
-def create_practical_model(csv_path: str = "historical_rsvp_data.csv"):
+
+# --------------------------------------------------------------------------- #
+# Training + metadata                                                         #
+# --------------------------------------------------------------------------- #
+def create_practical_model(csv_path: Path = CSV_PATH) -> None:
     df = load_and_prepare(csv_path)
 
-    X = df[['RegisteredCount', 'WeatherTemperature',
-             'SunsetHour', 'EventMonth', 'EventWeekday']]
-    y = df['y']
-    features = list(X.columns)
+    # Use *every* numeric column except the target y
+    features: list[str] = [
+        c for c in df.select_dtypes(include=["int64", "float64"]).columns if c != "y"
+    ]
+    X, y = df[features], df["y"]
 
-    print("Training random‑forest")
-    rf = RandomForestRegressor(n_estimators=100, random_state=42)
+    logger.info("Training Random-Forest on %d samples / %d features", len(df), len(features))
+    rf = RandomForestRegressor(n_estimators=200, random_state=42)
     rf.fit(X, y)
 
-    print("Training linear regression")
+    logger.info("Training LinearRegression")
     lr = LinearRegression()
     lr.fit(X, y)
 
-    meta = {
-        "features": features,
+    # persist
+    RF_MODEL_PATH.write_bytes(pickle.dumps(rf))
+    LR_MODEL_PATH.write_bytes(pickle.dumps(lr))
+
+    metadata = {
+        "feature_cols": features,        #  <- single canonical key
         "target": "y",
-        "model_version": date.today().isoformat()
+        "model_version": date.today().isoformat(),
     }
+    METADATA_PATH.write_text(json.dumps(metadata, indent=2))
 
-    print("Saving models and metadata")
-    with open("rf_model.pkl", "wb") as f:
-        pickle.dump(rf, f)
-    with open("lr_model.pkl", "wb") as f:
-        pickle.dump(lr, f)
-    with open("model_metadata.json", "w") as f:
-        json.dump(meta, f, indent=2)
+    logger.info("Saved models + metadata (version %s)", metadata["model_version"])
 
-    print(f"Completed―version {meta['model_version']}")
 
 if __name__ == "__main__":
     create_practical_model()
