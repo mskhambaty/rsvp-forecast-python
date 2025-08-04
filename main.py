@@ -1,21 +1,25 @@
 #!/usr/bin/env python3
 """
-FastAPI microservice to serve RSVP‑based forecasts.
-POST /forecast  with JSON of event info, returns predicted attendance (y).
+FastAPI microservice to serve RSVP-based attendance forecasts.
+POST /predict_event_rsvp expects:
+{
+  "registered_count": int,
+  "days_to_event": int,
+  "venue_good": bool,
+  "venue_bad": bool,
+  "special_event": bool,
+  ...and any other features in model_metadata.json
+}
 """
 
-import os
-import json
-import pickle
-from typing import Literal
+import os, json, pickle
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import numpy as np
 
 app = FastAPI()
 FEATURES = []
-rf_model = None
-lr_model = None
+rf_model, lr_model = None, None
 
 class Event(BaseModel):
     registered_count: int
@@ -23,7 +27,7 @@ class Event(BaseModel):
     venue_good: bool
     venue_bad: bool
     special_event: bool
-    # … all your other features from FEATURES list
+    # add other features exactly matching those in FEATURES
 
 class ForecastOut(BaseModel):
     rf_prediction: float
@@ -33,36 +37,38 @@ class ForecastOut(BaseModel):
 @app.on_event("startup")
 def load_models():
     global FEATURES, rf_model, lr_model
-    with open('features.json') as f:
+    with open("model_metadata.json") as f:
         md = json.load(f)
-    FEATURES = md.get('feature_order', [])
-    for fname in ['model_rf.pkl', 'model_linreg.pkl']:
-        if not os.path.exists(fname):
-            raise RuntimeError(f"Missing {fname}—did you run the training step?")
-    with open('model_rf.pkl', 'rb') as f:
-        rf_model = pickle.load(f)
-    with open('model_linreg.pkl', 'rb') as f:
-        lr_model = pickle.load(f)
-    print("Models loaded, Features:", FEATURES)
+    FEATURES = md.get("feature_order", [])
+    missing = [fname for fname in ("rf_model.pkl", "lr_model.pkl") if not os.path.exists(fname)]
+    if missing:
+        raise RuntimeError("Missing model files: " + ", ".join(missing))
 
-@app.post('/forecast', response_model=ForecastOut)
-def forecast(event: Event):
-    # Build feature vector in correct order
-    fv = {feat: getattr(event, feat) for feat in FEATURES}
-    try:
-        X = np.array([[fv[feat] for feat in FEATURES]], dtype=float)
-    except Exception as e:
-        raise HTTPException(status_code=422, detail=f"Error building feature vector: {e}")
+    with open("rf_model.pkl", "rb") as f: rf_model = pickle.load(f)
+    with open("lr_model.pkl", "rb") as f: lr_model = pickle.load(f)
 
-    rf_pred = rf_model.predict(X)[0]
-    lr_pred = lr_model.predict(X)[0]
+    print(f"API Startup: loaded RF & LR models with features = {FEATURES}")
+
+@app.post("/predict_event_rsvp", response_model=ForecastOut)
+def predict_event_rsvp(evt: Event):
+    fv = {}
+    for feat in FEATURES:
+        try:
+            fv[feat] = getattr(evt, feat)
+        except AttributeError:
+            raise HTTPException(status_code=422,
+                                detail=f"Missing feature in request—expected '{feat}'")
+    X = np.array([[fv[f] for f in FEATURES]], dtype=float)
+
+    rf_pred = float(rf_model.predict(X)[0])
+    lr_pred = float(lr_model.predict(X)[0])
 
     return ForecastOut(
-        rf_prediction=float(rf_pred),
-        linreg_prediction=float(lr_pred),
+        rf_prediction=rf_pred,
+        linreg_prediction=lr_pred,
         feature_values=fv
     )
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host='0.0.0.0', port=int(os.getenv("PORT", 8000)))
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
