@@ -1,46 +1,59 @@
+import json
 import pandas as pd
 import pickle
-from sklearn.linear_model import LinearRegression
+from datetime import date
 from sklearn.ensemble import RandomForestRegressor
+from sklearn.linear_model import LinearRegression
 
-def load_and_prepare():
-    print("=== CREATING PRACTICAL FORECASTING MODELS ===")
-    print("Loading events from historical_rsvp_data.csv")
-    df = pd.read_csv("historical_rsvp_data.csv")
+def load_and_prepare(csv_path: str = "historical_rsvp_data.csv") -> pd.DataFrame:
+    print("=== Loading and preparing data")
+    df = pd.read_csv(csv_path)
 
-    required_columns = ['ds', 'y', 'RegisteredCount', 'WeatherTemperature', 'SunsetTime']
-    for col in required_columns:
-        if col not in df.columns:
-            raise KeyError(f"ERROR: Required column '{col}' not found in CSV.")
+    required = ['ds', 'y', 'RegisteredCount',
+                'WeatherTemperature', 'SunsetTime']
+    missing = set(required) - set(df.columns)
+    if missing:
+        raise KeyError(f"Missing required columns: {missing}")
 
-    df = df.dropna(subset=required_columns)
+    df = df.dropna(subset=required)
     df['SunsetHour'] = df['SunsetTime'].str.split(":").str[0].astype(int)
-    df['EventMonth'] = pd.to_datetime(df['ds'], errors='coerce').dt.month.fillna(0).astype(int)
-    df['EventWeekday'] = pd.to_datetime(df['ds'], errors='coerce').dt.weekday.fillna(0).astype(int)
+    ts = pd.to_datetime(df['ds'], format='%Y-%m-%d', errors='coerce')
+    df['EventMonth'] = ts.dt.month.fillna(0).astype(int)
+    df['EventWeekday'] = ts.dt.weekday.fillna(0).astype(int)
 
     return df
 
-def create_practical_model():
-    df = load_and_prepare()
+def create_practical_model(csv_path: str = "historical_rsvp_data.csv"):
+    df = load_and_prepare(csv_path)
 
-    X = df[['RegisteredCount', 'WeatherTemperature', 'SunsetHour', 'EventMonth', 'EventWeekday']]
-    y = df['y']  # Updated from 'ActualCount'
+    X = df[['RegisteredCount', 'WeatherTemperature',
+             'SunsetHour', 'EventMonth', 'EventWeekday']]
+    y = df['y']
+    features = list(X.columns)
 
-    rf_model = RandomForestRegressor(n_estimators=100, random_state=42)
-    rf_model.fit(X, y)
-    print("✅ Random Forest model trained.")
+    print("Training random‑forest")
+    rf = RandomForestRegressor(n_estimators=100, random_state=42)
+    rf.fit(X, y)
 
-    lr_model = LinearRegression()
-    lr_model.fit(X, y)
-    print("✅ Linear Regression model trained.")
+    print("Training linear regression")
+    lr = LinearRegression()
+    lr.fit(X, y)
 
+    meta = {
+        "features": features,
+        "target": "y",
+        "model_version": date.today().isoformat()
+    }
+
+    print("Saving models and metadata")
     with open("rf_model.pkl", "wb") as f:
-        pickle.dump(rf_model, f)
-
+        pickle.dump(rf, f)
     with open("lr_model.pkl", "wb") as f:
-        pickle.dump(lr_model, f)
+        pickle.dump(lr, f)
+    with open("model_metadata.json", "w") as f:
+        json.dump(meta, f, indent=2)
 
-    print("✅ Models saved as rf_model.pkl and lr_model.pkl")
+    print(f"Completed―version {meta['model_version']}")
 
 if __name__ == "__main__":
     create_practical_model()
