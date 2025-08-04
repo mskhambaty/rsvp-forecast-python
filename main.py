@@ -1,87 +1,105 @@
+#!/usr/bin/env python3
+"""
+FastAPI micro-service for RSVP forecasting.
+
+• Dynamic Pydantic schema is auto-generated from model_metadata.json
+• /predict_event_rsvp validates against that schema
+• Models loaded once via FastAPI lifespan context
+"""
+from __future__ import annotations
+
 import json
 import logging
 import pickle
-from datetime import date
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Dict
 
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, create_model, Field
+import pandas as pd
+from fastapi import Body, FastAPI, HTTPException
+from pydantic import Field, create_model
 
-# Set up logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("rsvp_forecast")
+# ---------------------------------------------------------------------------- #
+# Static boot-time steps – need metadata to build the schema                   #
+# ---------------------------------------------------------------------------- #
+METADATA_PATH = Path("model_metadata.json")
+RF_MODEL_PATH = Path("rf_model.pkl")
+LR_MODEL_PATH = Path("lr_model.pkl")
 
-# Utility to load models and metadata at startup
+if not METADATA_PATH.exists():
+    raise FileNotFoundError("model_metadata.json missing - run create_practical_model.py first")
+
+meta = json.loads(METADATA_PATH.read_text())
+FEATURES: list[str] = meta["feature_cols"]
+
+# Build dynamic input model
+field_definitions: Dict[str, tuple] = {
+    f: (float, Field(...)) for f in FEATURES  # float accepts int, enforces number
+}
+Event = create_model(  # type: ignore[call-arg]
+    "Event",
+    **field_definitions,
+    __config__=type("Cfg", (), {"extra": "forbid"}),
+)
+
+# ---------------------------------------------------------------------------- #
+# Lifespan – load models once, expose via app.state                            #
+# ---------------------------------------------------------------------------- #
+logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
+logger = logging.getLogger("rsvp_api")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    md = Path("model_metadata.json")
-    if not md.exists():
-        logger.error("model_metadata.json missing")
-        raise FileNotFoundError("Required metadata file")
-    metadata = json.loads(md.read_text())
-    features = metadata["features"]
+    try:
+        app.state.rf = pickle.loads(RF_MODEL_PATH.read_bytes())
+        app.state.lr = pickle.loads(LR_MODEL_PATH.read_bytes())
+        app.state.features = FEATURES
+        app.state.meta = meta
+        logger.info("Models loaded (version %s)", meta["model_version"])
+        yield
+    finally:
+        logger.info("Shutting down")
 
-    # Dynamically build Pydantic model
-    fields = {}
-    for feat in features:
-        ft = int if feat.endswith("Count") or feat == "SunsetHour" else float
-        fields[feat] = (ft, Field(..., ge=0))
-    # Add days_until_event if used by your `predict` logic
-    fields["days_to_event"] = (int, Field(..., ge=0))
-    Event = create_model(
-        "Event", **fields,
-        __config__=type("C", (), {"extra": "forbid"})
-    )
-
-    app.state.Event = Event
-    app.state.features = features
-    app.state.rf = pickle.loads(Path("rf_model.pkl").read_bytes())
-    app.state.lr = pickle.loads(Path("lr_model.pkl").read_bytes())
-    app.state.meta = metadata
-
-    logger.info(f"Models loaded from version {metadata.get('model_version')}")
-    yield
-    # (Optional cleanup)
 
 app = FastAPI(lifespan=lifespan)
 
-@app.get("/")
+# ---------------------------------------------------------------------------- #
+# Routes                                                                       #
+# ---------------------------------------------------------------------------- #
+@app.get("/health")
 def health():
-    return {"status": "ok", "model_version": app.state.meta.get("model_version")}
+    return {"status": "ok", "model_version": app.state.meta["model_version"]}
+
 
 @app.get("/model_info")
 def model_info():
     return app.state.meta
 
+
 @app.post("/predict_event_rsvp")
-async def predict_event_rsvp(event: None):
+def predict_event_rsvp(event: Event):
     """
-    Validate event via schema, prepare features, predict,
-    clamp to zero, produce interval, return JSON.
+    Validate JSON against dynamic Event schema, run both models,
+    return point forecast + simple min/max band, clamped ≥ 0.
     """
-    Event = app.state.Event
-    try:
-        ev = Event.model_validate(event) if isinstance(event, dict) else event
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Invalid input: {e}")
+    X_row = pd.DataFrame([[getattr(event, f) for f in app.state.features]],
+                         columns=app.state.features)
 
-    # Prepare X row
-    x = [getattr(ev, f) for f in app.state.features]
     try:
-        pred = app.state.rf.predict([x])[0]
-    except Exception as e:
-        logger.exception("RF failed")
-        raise HTTPException(status_code=500, detail="Prediction failed")
+        rf_pred = float(app.state.rf.predict(X_row)[0])
+        lr_pred = float(app.state.lr.predict(X_row)[0])
+    except Exception as exc:  # model or feature mis-match
+        logger.exception("Prediction error")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-    pred = max(0, round(pred))
-    lr_pred = round(app.state.lr.predict([x])[0])
-    lo = max(0, min(pred, lr_pred))
-    hi = pred + abs(pred - lr_pred)
+    point = max(0, round(rf_pred))
+    lo = max(0, min(point, round(lr_pred)))
+    hi = max(point, round(lr_pred))
 
     return {
-        "predicted_rsvp_count": pred,
+        "predicted_rsvp": point,
         "lower_bound": lo,
         "upper_bound": hi,
-        "model_version": app.state.meta.get("model_version"),
+        "model_version": app.state.meta["model_version"],
     }
