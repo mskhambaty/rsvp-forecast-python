@@ -1,0 +1,61 @@
+name: Send Daily RSVP Forecast Emails
+
+on:
+  schedule:
+    # Run daily at 12:00 UTC (7:00 AM CDT / 6:00 AM CST)
+    - cron: '0 12 * * *'
+  workflow_dispatch:
+    # Allow manual triggering
+    
+jobs:
+  send-forecast:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        
+    - name: Run RSVP forecast emailer
+      env:
+        # Render API Configuration
+        RENDER_BASE_URL: ${{ secrets.RENDER_BASE_URL || 'https://rsvp-forecast-python.onrender.com' }}
+        
+        # Mosque Location
+        MOSQUE_LAT: ${{ vars.MOSQUE_LAT || '41.7670' }}
+        MOSQUE_LON: ${{ vars.MOSQUE_LON || '-87.9428' }}
+        
+        # Event Configuration
+        EVENT_WINDOW_DAYS: ${{ vars.EVENT_WINDOW_DAYS || '2' }}
+        THAALS_DIVISOR: ${{ vars.THAALS_DIVISOR || '8' }}
+        
+        # Forecast API Retry Configuration
+        FORECAST_RETRIES: ${{ vars.FORECAST_RETRIES || '3' }}
+        FORECAST_RETRY_DELAY_SECONDS: ${{ vars.FORECAST_RETRY_DELAY_SECONDS || '12' }}
+        
+        # SMTP Configuration (Zoho)
+        SMTP_HOST: ${{ vars.SMTP_HOST || 'smtp.zoho.com' }}
+        SMTP_PORT: ${{ vars.SMTP_PORT || '587' }}
+        SMTP_USE_TLS: ${{ vars.SMTP_USE_TLS || 'true' }}
+        SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+        SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+        SMTP_FROM: ${{ secrets.SMTP_FROM || secrets.SMTP_USERNAME }}
+        SMTP_TO: ${{ vars.SMTP_TO || 'rsvps@panxpan.com' }}
+        
+        # Chicago Jamaat API
+        JAMAAT_API_TOKEN: ${{ secrets.JAMAAT_API_TOKEN }}
+        
+        # Logging
+        LOG_LEVEL: ${{ vars.LOG_LEVEL || 'INFO' }}
+        
+      run: |
+        python src/alert_forecast.py
