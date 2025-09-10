@@ -176,3 +176,109 @@ Track prediction accuracy by comparing:
 ## 📄 License
 
 MIT License - see LICENSE file for details.
+
+## 📧 Automated RSVP Forecast Emails
+
+The repository includes an automated system that sends daily RSVP forecast emails for upcoming Chicago Jamaat events.
+
+### 🚀 Features
+
+- **Daily Automation**: Runs automatically at 12:00 UTC (7:00 AM CDT / 6:00 AM CST) via GitHub Actions
+- **Smart Event Detection**: Fetches upcoming events 0-2 days ahead from Chicago Jamaat API
+- **Weather Integration**: Incorporates real-time weather data from Open-Meteo API
+- **ML-Powered Forecasts**: Uses the Render-hosted model with retry logic for cold starts
+- **Rich Email Reports**: HTML-formatted emails with attendance predictions, weather info, and thaals estimates
+- **Zoho SMTP**: Sends via Zoho Mail for reliable delivery
+
+### 🔧 Setup Instructions
+
+#### Required GitHub Secrets
+Add these to your repository's **Settings > Secrets and variables > Actions > Secrets**:
+
+```
+SMTP_USERNAME=your_zoho_email@domain.com
+SMTP_PASSWORD=your_zoho_app_password
+```
+
+Optional secrets:
+```
+SMTP_FROM=custom_from_email@domain.com  # Defaults to SMTP_USERNAME
+JAMAAT_API_TOKEN=your_api_token_if_required
+RENDER_BASE_URL=https://your-custom-render-url.onrender.com  # Optional override
+```
+
+#### Optional GitHub Variables
+Configure these in **Settings > Secrets and variables > Actions > Variables**:
+
+```
+SMTP_TO=rsvps@panxpan.com  # Email recipient (default)
+MOSQUE_LAT=41.7670         # Mosque latitude (Willowbrook, IL)
+MOSQUE_LON=-87.9428        # Mosque longitude
+EVENT_WINDOW_DAYS=2        # Days ahead to check (0-2 = today, tomorrow, day after)
+THAALS_DIVISOR=8          # People per thaal for estimation
+LOG_LEVEL=INFO            # Logging verbosity
+```
+
+#### Zoho SMTP Setup
+1. **Enable 2FA** on your Zoho account
+2. **Generate App Password**: Zoho Control Panel > Security > App Passwords
+3. **Use App Password** as `SMTP_PASSWORD` (not your regular password)
+
+### 🏃‍♂️ Running Locally
+
+1. **Install Dependencies**:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+2. **Configure Environment**:
+   ```bash
+   cp .env.example .env
+   # Edit .env with your credentials
+   ```
+
+3. **Run Forecast Emailer**:
+   ```bash
+   python src/alert_forecast.py
+   ```
+
+### 📊 Email Content
+
+Each forecast email includes:
+
+- **Event Details**: Name, date, registered count
+- **RSVP Predictions**: ML-generated attendance forecast with confidence range
+- **Weather Information**: Temperature, precipitation, sunset time  
+- **Thaals Estimate**: Calculated as `ceil(predicted_attendance / 8)`
+- **Smart Notes**: Day-of-week effects, weather impact insights
+
+### 🔧 Troubleshooting
+
+**No emails being sent?**
+- Check GitHub Actions logs for error details
+- Verify SMTP credentials are correct (use app password for Zoho)
+- Ensure the Render API is responding (may have cold start delays)
+
+**Missing events?**
+- Check if events exist in the 0-2 day window
+- Verify Chicago Jamaat API is accessible
+- Check if API token is required and properly set
+
+**Forecast errors?**
+- Render API may be in cold start (automatically retried)
+- Check weather API availability 
+- Verify event data format matches expected structure
+
+**Email formatting issues?**
+- HTML emails require proper MIME setup (automatically handled)
+- Check recipient email server supports HTML content
+
+### ⚙️ Customization
+
+**Change email schedule**: Edit `.github/workflows/send-forecast-emails.yml` cron expression
+
+**Modify forecast window**: Set `EVENT_WINDOW_DAYS` variable (0 = today only, 2 = today + 2 days ahead)
+
+**Adjust thaals calculation**: Set `THAALS_DIVISOR` variable (default: 8 people per thaal)
+
+**Update email recipient**: Set `SMTP_TO` variable or modify the default in code
